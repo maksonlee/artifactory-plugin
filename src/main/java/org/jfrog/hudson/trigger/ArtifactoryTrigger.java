@@ -6,14 +6,21 @@ import hudson.maven.MavenModuleSet;
 import hudson.model.*;
 import hudson.triggers.Trigger;
 import hudson.triggers.TriggerDescriptor;
+import hudson.util.ListBoxModel;
 import org.jenkinsci.plugins.workflow.job.WorkflowJob;
 import org.jfrog.build.api.util.NullLog;
 import org.jfrog.build.client.ArtifactoryHttpClient;
 import org.jfrog.build.client.ItemLastModified;
 import org.jfrog.hudson.ArtifactoryServer;
+import org.jfrog.hudson.CredentialsConfig;
+import org.jfrog.hudson.DeployerOverrider;
 import org.jfrog.hudson.ServerDetails;
+import org.jfrog.hudson.util.CredentialManager;
+import org.jfrog.hudson.util.Credentials;
 import org.jfrog.hudson.util.JenkinsBuildInfoLog;
 import org.jfrog.hudson.util.RepositoriesUtils;
+import org.jfrog.hudson.util.plugins.PluginsUtils;
+import org.kohsuke.stapler.AncestorInPath;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 import java.io.IOException;
@@ -24,17 +31,20 @@ import java.util.logging.Logger;
 /**
  * @author Alexei Vainshtein
  */
-public class ArtifactoryTrigger extends Trigger {
+public class ArtifactoryTrigger extends Trigger implements DeployerOverrider {
     private static final Logger logger = Logger.getLogger(JenkinsBuildInfoLog.class.getName());
+
+    private final CredentialsConfig deployerCredentialsConfig;
 
     private String path;
     private ServerDetails details;
     private long lastModified = System.currentTimeMillis();
 
     @DataBoundConstructor
-    public ArtifactoryTrigger(String path, String spec, ServerDetails details) throws ANTLRException {
+    public ArtifactoryTrigger(String path, String spec, CredentialsConfig deployerCredentialsConfig, ServerDetails details) throws ANTLRException {
         super(spec);
         this.path = path;
+        this.deployerCredentialsConfig = deployerCredentialsConfig;
         this.details = details;
     }
 
@@ -49,9 +59,11 @@ public class ArtifactoryTrigger extends Trigger {
             logger.warning("Artifactory server " + details.getArtifactoryName() + " doesn't exists.");
             return;
         }
+
+        CredentialsConfig credentialsConfig = CredentialManager.getPreferredDeployer(this, artifactoryServer);
+
         ArtifactoryHttpClient client = new ArtifactoryHttpClient(artifactoryServer.getUrl(),
-                artifactoryServer.getDeployerCredentialsConfig().provideUsername(job),
-                artifactoryServer.getDeployerCredentialsConfig().providePassword(job),
+                credentialsConfig.provideUsername(job), credentialsConfig.providePassword(job),
                 new NullLog());
         try {
             ItemLastModified itemLastModified = client.getItemLastModified(path);
@@ -116,6 +128,21 @@ public class ArtifactoryTrigger extends Trigger {
         return (DescriptorImpl) super.getDescriptor();
     }
 
+    @Override
+    public boolean isOverridingDefaultDeployer() {
+        return deployerCredentialsConfig != null && deployerCredentialsConfig.isCredentialsProvided();
+    }
+
+    @Override
+    public Credentials getOverridingDeployerCredentials() {
+        return null;
+    }
+
+    @Override
+    public CredentialsConfig getDeployerCredentialsConfig() {
+        return deployerCredentialsConfig;
+    }
+
     @Extension
     public static final class DescriptorImpl extends TriggerDescriptor {
 
@@ -129,6 +156,11 @@ public class ArtifactoryTrigger extends Trigger {
 
         public List<ArtifactoryServer> getArtifactoryServers() {
             return RepositoriesUtils.getArtifactoryServers();
+        }
+
+        @SuppressWarnings("unused")
+        public ListBoxModel doFillCredentialsIdItems(@AncestorInPath Item project) {
+            return PluginsUtils.fillPluginCredentials(project);
         }
     }
 }
